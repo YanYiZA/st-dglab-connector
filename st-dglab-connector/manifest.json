@@ -1,0 +1,7 @@
+{
+    "display_name": "DG-Lab Connector",
+    "requires": [],
+    "js": "index.js",
+    "author": "YanHua",
+    "version": "1.0.0"
+}
