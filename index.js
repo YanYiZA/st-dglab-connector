@@ -4,6 +4,7 @@ import { extension_settings } from '../../../extensions.js';
 const MODULE_NAME = 'dglab_connector';
 const DEFAULT_SETTINGS = {
     enabled: true,
+    queueOverride: false,
     hubApiUrl: 'http://127.0.0.1:8920',
     targetId: '1',
     maxStrength: 20,
@@ -30,27 +31,42 @@ function renderSettings() {
                 <b>DG-Lab Connector</b>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
-            <div class="inline-drawer-content">
-                <label class="checkbox_label">
-                    <input type="checkbox" id="dglab_enabled" ${settings.enabled ? 'checked' : ''} />
-                    <span>启用插件 (Enable)</span>
-                </label>
-                
-                <hr>
-                
-                <label>Hub API URL:</label>
-                <input type="text" id="dglab_hub_url" class="text_pole" value="${settings.hubApiUrl || ''}" placeholder="http://127.0.0.1:8920" />
-                
-                <label>Target ID:</label>
-                <input type="text" id="dglab_target_id" class="text_pole" value="${settings.targetId || ''}" placeholder="1" />
-                
-                <label>Max Strength (100%):</label>
-                <input type="number" id="dglab_max_strength" class="text_pole" value="${settings.maxStrength || 20}" placeholder="20" />
-
-                <div style="margin-top: 10px;">
-                    <button id="dglab_test_btn" class="menu_button">Test Shock (50%)</button>
+            <div class="inline-drawer-content" style="display: flex; flex-direction: column; gap: 10px;">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <label class="checkbox_label" style="flex: 1;">
+                        <input type="checkbox" id="dglab_enabled" ${settings.enabled ? 'checked' : ''} />
+                        <span>启用插件</span>
+                    </label>
+                    <label class="checkbox_label" style="flex: 1;" title="开启后，收到新指令时将自动清空当前队列中积压的旧指令，优先执行最新反馈。">
+                        <input type="checkbox" id="dglab_queue_override" ${settings.queueOverride ? 'checked' : ''} />
+                        <span>覆盖旧指令 ⓘ</span>
+                    </label>
                 </div>
-                <div id="dglab_status" style="margin-top: 5px; font-size: 0.8em; opacity: 0.7;"></div>
+                
+                <hr style="margin: 5px 0; border-color: rgba(255,255,255,0.1);">
+                
+                <div>
+                    <label style="display: block; margin-bottom: 5px; font-weight: bold;">Hub API 地址</label>
+                    <input type="text" id="dglab_hub_url" class="text_pole" style="width: 100%; box-sizing: border-box;" value="${settings.hubApiUrl || ''}" placeholder="http://127.0.0.1:8920" />
+                </div>
+                
+                <div>
+                    <label style="display: block; margin-bottom: 5px; font-weight: bold;">目标设备 ID (Target ID)</label>
+                    <input type="text" id="dglab_target_id" class="text_pole" style="width: 100%; box-sizing: border-box;" value="${settings.targetId || ''}" placeholder="1" />
+                </div>
+                
+                <div>
+                    <label style="display: block; margin-bottom: 5px; font-weight: bold;">最大强度 (100% 对应值)</label>
+                    <input type="number" id="dglab_max_strength" class="text_pole" style="width: 100%; box-sizing: border-box;" value="${settings.maxStrength || 20}" placeholder="20" />
+                    <small style="opacity: 0.7;">为了安全，请设定一个物理强度上限。</small>
+                </div>
+
+                <div style="margin-top: 10px; display: flex; flex-direction: column; align-items: center; gap: 5px;">
+                    <button id="dglab_test_btn" class="menu_button" style="width: 100%; padding: 8px; font-weight: bold; background-color: var(--smart-theme-body-bg); border: 1px solid var(--smart-theme-border);">
+                        测试电击 (50%)
+                    </button>
+                    <div id="dglab_status" style="margin-top: 5px; font-size: 0.9em; min-height: 1.2em;"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -63,6 +79,11 @@ function bindEvents() {
     
     $settings.on('change', '#dglab_enabled', function() {
         getSettings().enabled = $(this).is(':checked');
+        saveSettingsDebounced();
+    });
+
+    $settings.on('change', '#dglab_queue_override', function() {
+        getSettings().queueOverride = $(this).is(':checked');
         saveSettingsDebounced();
     });
 
@@ -84,13 +105,13 @@ function bindEvents() {
     $settings.on('click', '#dglab_test_btn', async function() {
         const btn = $(this);
         const originalText = btn.text();
-        btn.prop('disabled', true).text('Sending...');
+        btn.prop('disabled', true).text('发送中...');
         
         try {
             await sendShock(50);
-            $('#dglab_status').text('Test sent successfully!').css('color', 'green');
+            $('#dglab_status').text('测试发送成功！').css('color', 'green');
         } catch (err) {
-            $('#dglab_status').text('Error: ' + err.message).css('color', 'red');
+            $('#dglab_status').text('错误: ' + err.message).css('color', 'red');
         } finally {
             setTimeout(() => {
                 btn.prop('disabled', false).text(originalText);
@@ -98,6 +119,7 @@ function bindEvents() {
             }, 1000);
         }
     });
+
 }
 
 async function sendShock(intensity, duration = 5.0) {
@@ -170,8 +192,12 @@ async function processQueue() {
 function processMessage(text) {
     if (!text) return;
     
+    const settings = getSettings();
     let match;
     let found = false;
+    
+    // Collect all new commands first
+    const newCommands = [];
     while ((match = SHOCK_REGEX.exec(text)) !== null) {
         const intensity = parseInt(match[1]);
         // Default duration 5s if not specified
@@ -179,12 +205,18 @@ function processMessage(text) {
 
         if (!isNaN(intensity)) {
             console.log(`[DG-Lab] Found tag: Strength=${intensity}, Duration=${duration}s`);
-            shockQueue.push({ intensity, duration });
+            newCommands.push({ intensity, duration });
             found = true;
         }
     }
 
     if (found) {
+        if (settings.queueOverride) {
+            console.log('[DG-Lab] Override enabled: Clearing previous queue.');
+            shockQueue.length = 0; // Clear existing queue
+        }
+        
+        shockQueue.push(...newCommands);
         processQueue();
     }
 }
