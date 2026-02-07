@@ -6,6 +6,7 @@ const DEFAULT_SETTINGS = {
     enabled: true,
     hubApiUrl: 'http://127.0.0.1:8920',
     targetId: '1',
+    maxStrength: 20,
     intensityMap: {
         'low': 5,
         'medium': 10,
@@ -43,8 +44,11 @@ function renderSettings() {
                 <label>Target ID:</label>
                 <input type="text" id="dglab_target_id" class="text_pole" value="${settings.targetId || ''}" placeholder="1" />
                 
+                <label>Max Strength (100%):</label>
+                <input type="number" id="dglab_max_strength" class="text_pole" value="${settings.maxStrength || 20}" placeholder="20" />
+
                 <div style="margin-top: 10px;">
-                    <button id="dglab_test_btn" class="menu_button">Test Shock (Level 5)</button>
+                    <button id="dglab_test_btn" class="menu_button">Test Shock (50%)</button>
                 </div>
                 <div id="dglab_status" style="margin-top: 5px; font-size: 0.8em; opacity: 0.7;"></div>
             </div>
@@ -72,13 +76,18 @@ function bindEvents() {
         saveSettingsDebounced();
     });
 
+    $settings.on('input', '#dglab_max_strength', function() {
+        getSettings().maxStrength = parseInt($(this).val());
+        saveSettingsDebounced();
+    });
+
     $settings.on('click', '#dglab_test_btn', async function() {
         const btn = $(this);
         const originalText = btn.text();
         btn.prop('disabled', true).text('Sending...');
         
         try {
-            await sendShock(5);
+            await sendShock(50);
             $('#dglab_status').text('Test sent successfully!').css('color', 'green');
         } catch (err) {
             $('#dglab_status').text('Error: ' + err.message).css('color', 'red');
@@ -95,11 +104,16 @@ async function sendShock(intensity, duration = 5.0) {
     const settings = getSettings();
     if (!settings.enabled) return;
 
-    const strengthVal = parseInt(intensity);
+    const maxStrength = settings.maxStrength || 20;
+    let percentage = parseInt(intensity);
+    if (percentage > 100) percentage = 100;
+    if (percentage < 0) percentage = 0;
+
+    const strengthVal = Math.round((percentage / 100) * maxStrength);
     const targetId = settings.targetId;
     const hubUrl = settings.hubApiUrl;
 
-    console.log(`[DG-Lab] Processing shock: Strength=${strengthVal}, Time=${duration}s`);
+    console.log(`[DG-Lab] Processing shock: ${percentage}% -> Strength=${strengthVal}, Time=${duration}s`);
 
     const setStrength = async (val) => {
         const url = `${hubUrl}/api/v2/game/${targetId}/strength`;
