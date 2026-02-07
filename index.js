@@ -142,8 +142,13 @@ async function sendShock(intensity, duration = 5.0) {
     console.log(`[DG-Lab] Processing shock: ${percentage}% -> Strength=${strengthVal} (Max: ${maxStrength}), Time=${duration}s`);
 
     const setStrength = async (val) => {
-        const url = `${hubUrl}/api/v2/game/${targetId}/strength`;
-        const response = await fetch(url, {
+        // Use SillyTavern's built-in proxy to bypass CORS
+        // The hubUrl should not have a trailing slash, but we handle it just in case
+        const cleanHubUrl = hubUrl.endsWith('/') ? hubUrl.slice(0, -1) : hubUrl;
+        const targetUrl = `${cleanHubUrl}/api/v2/game/${targetId}/strength`;
+        const proxyUrl = `/proxy/${encodeURI(targetUrl)}`;
+        
+        const response = await fetch(proxyUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -257,12 +262,15 @@ async function fetchGameInfo() {
     if (!targetId || !hubUrl) return;
 
     try {
-        const response = await fetch(`${hubUrl}/api/v2/game/${targetId}`);
+        // Use SillyTavern's built-in proxy to bypass CORS
+        const cleanHubUrl = hubUrl.endsWith('/') ? hubUrl.slice(0, -1) : hubUrl;
+        const targetUrl = `${cleanHubUrl}/api/v2/game/${targetId}`;
+        const proxyUrl = `/proxy/${encodeURI(targetUrl)}`;
+
+        const response = await fetch(proxyUrl);
+        
         if (response.ok) {
             const data = await response.json();
-            // Check status code from API response (0 usually means success/connected in some APIs, but here data structure suggests success)
-            // Based on user feedback: {status: 1, code: 'OK', strengthConfig: null, ...} when not connected properly or empty?
-            // Actually, if clientStrength is null, it means no device connected to that slot.
             
             if (data && data.clientStrength && typeof data.clientStrength.limit === 'number') {
                 apiMaxStrength = data.clientStrength.limit;
@@ -274,7 +282,12 @@ async function fetchGameInfo() {
             }
         } else {
             connectionStatus = false;
-            apiMaxStrength = -1;
+            // Differentiate between 404 (Proxy not enabled or Hub not found) and other errors
+            if (response.status === 404) {
+                apiMaxStrength = -2; // Special code for Proxy Error
+            } else {
+                apiMaxStrength = -1;
+            }
         }
     } catch (err) {
         connectionStatus = false;
@@ -289,13 +302,15 @@ function updateStatusUI() {
     const $text = $('#dglab_connection_text');
     
     if ($dot.length && $text.length) {
-        if (connectionStatus && apiMaxStrength !== -1) {
+        if (connectionStatus && apiMaxStrength !== -1 && apiMaxStrength !== -2) {
             $dot.css('background-color', '#4caf50'); // Green
             $text.text(`已连接 (最大强度: ${apiMaxStrength})`).css('color', '#4caf50');
         } else {
             $dot.css('background-color', '#f44336'); // Red
             if (apiMaxStrength === -1) {
                 $text.text('未连接 (设备离线)').css('color', '#f44336');
+            } else if (apiMaxStrength === -2) {
+                $text.text('未连接 (请检查 config.yaml 中 enableCorsProxy 是否开启)').css('color', '#f44336');
             } else {
                 $text.text('未连接').css('color', '#f44336');
             }

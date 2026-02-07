@@ -24,10 +24,17 @@
 ## 🛠️ 使用方法
 
 ### 1. 环境准备
-- 在SillyTavern安装该扩展
+- 在 SillyTavern 安装该扩展。
 - 确保已安装并运行 **DG-Lab Hub** (或其他兼容的 WebSocket/HTTP 桥接服务)。
 - 确保 **DG-Lab 设备** 已连接到 Hub。
-- 安装并启用 Chrome 插件 **Moesif Origin/CORS Changer & API Logger** 以解决 CORS 问题。
+- **配置 SillyTavern 解决跨域问题**
+    1. 打开 SillyTavern 根目录下的 `config.yaml` 文件。
+    2. 找到 `enableCorsProxy` 选项，将其修改为 `true`：
+       ```yaml
+       enableCorsProxy: true
+       ```
+    3. 保存文件并**重启 SillyTavern**。
+    *如果不开启此选项，插件将显示“未连接 (请检查 config.yaml 中 enableCorsProxy 是否开启)”。*
 
 ### 2. 插件设置
 在 SillyTavern 的扩展设置面板中找到 **DG-Lab Connector**：
