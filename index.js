@@ -15,6 +15,9 @@ const DEFAULT_SETTINGS = {
     }
 };
 
+let apiMaxStrength = null;
+let connectionStatus = false;
+
 function getSettings() {
     if (!extension_settings[MODULE_NAME]) {
         extension_settings[MODULE_NAME] = { ...DEFAULT_SETTINGS };
@@ -43,6 +46,11 @@ function renderSettings() {
                     </label>
                 </div>
                 
+                <div style="display: flex; align-items: center; gap: 8px; padding: 5px; background: rgba(0,0,0,0.1); border-radius: 4px;">
+                    <div id="dglab_connection_dot" style="width: 10px; height: 10px; border-radius: 50%; background-color: grey;"></div>
+                    <span id="dglab_connection_text" style="font-size: 0.9em;">未连接</span>
+                </div>
+
                 <hr style="margin: 5px 0; border-color: rgba(255,255,255,0.1);">
                 
                 <div>
@@ -53,12 +61,6 @@ function renderSettings() {
                 <div>
                     <label style="display: block; margin-bottom: 5px; font-weight: bold;">目标设备 ID (Target ID)</label>
                     <input type="text" id="dglab_target_id" class="text_pole" style="width: 100%; box-sizing: border-box;" value="${settings.targetId || ''}" placeholder="1" />
-                </div>
-                
-                <div>
-                    <label style="display: block; margin-bottom: 5px; font-weight: bold;">最大强度 (100% 对应值)</label>
-                    <input type="number" id="dglab_max_strength" class="text_pole" style="width: 100%; box-sizing: border-box;" value="${settings.maxStrength || 20}" placeholder="20" />
-                    <small style="opacity: 0.7;">为了安全，请设定一个物理强度上限。</small>
                 </div>
 
                 <div style="margin-top: 10px; display: flex; flex-direction: column; align-items: center; gap: 5px;">
@@ -97,11 +99,6 @@ function bindEvents() {
         saveSettingsDebounced();
     });
 
-    $settings.on('input', '#dglab_max_strength', function() {
-        getSettings().maxStrength = parseInt($(this).val());
-        saveSettingsDebounced();
-    });
-
     $settings.on('click', '#dglab_test_btn', async function() {
         const btn = $(this);
         const originalText = btn.text();
@@ -126,7 +123,14 @@ async function sendShock(intensity, duration = 5.0) {
     const settings = getSettings();
     if (!settings.enabled) return;
 
-    const maxStrength = settings.maxStrength || 20;
+    // If device is not connected or strength is invalid (-1), do not send
+    if (apiMaxStrength === -1 || apiMaxStrength === null) {
+        console.warn('[DG-Lab] Cannot send shock: Device not connected or max strength invalid.');
+        return;
+    }
+
+    const maxStrength = apiMaxStrength;
+    
     let percentage = parseInt(intensity);
     if (percentage > 100) percentage = 100;
     if (percentage < 0) percentage = 0;
@@ -135,7 +139,7 @@ async function sendShock(intensity, duration = 5.0) {
     const targetId = settings.targetId;
     const hubUrl = settings.hubApiUrl;
 
-    console.log(`[DG-Lab] Processing shock: ${percentage}% -> Strength=${strengthVal}, Time=${duration}s`);
+    console.log(`[DG-Lab] Processing shock: ${percentage}% -> Strength=${strengthVal} (Max: ${maxStrength}), Time=${duration}s`);
 
     const setStrength = async (val) => {
         const url = `${hubUrl}/api/v2/game/${targetId}/strength`;
@@ -243,6 +247,62 @@ function onMessageReceived(id) {
     }
 }
 
+async function fetchGameInfo() {
+    const settings = getSettings();
+    if (!settings.enabled) return;
+
+    const targetId = settings.targetId;
+    const hubUrl = settings.hubApiUrl;
+
+    if (!targetId || !hubUrl) return;
+
+    try {
+        const response = await fetch(`${hubUrl}/api/v2/game/${targetId}`);
+        if (response.ok) {
+            const data = await response.json();
+            // Check status code from API response (0 usually means success/connected in some APIs, but here data structure suggests success)
+            // Based on user feedback: {status: 1, code: 'OK', strengthConfig: null, ...} when not connected properly or empty?
+            // Actually, if clientStrength is null, it means no device connected to that slot.
+            
+            if (data && data.clientStrength && typeof data.clientStrength.limit === 'number') {
+                apiMaxStrength = data.clientStrength.limit;
+                connectionStatus = true;
+            } else {
+                // Device not connected or invalid slot
+                connectionStatus = false;
+                apiMaxStrength = -1;
+            }
+        } else {
+            connectionStatus = false;
+            apiMaxStrength = -1;
+        }
+    } catch (err) {
+        connectionStatus = false;
+        apiMaxStrength = -1;
+    }
+
+    updateStatusUI();
+}
+
+function updateStatusUI() {
+    const $dot = $('#dglab_connection_dot');
+    const $text = $('#dglab_connection_text');
+    
+    if ($dot.length && $text.length) {
+        if (connectionStatus && apiMaxStrength !== -1) {
+            $dot.css('background-color', '#4caf50'); // Green
+            $text.text(`已连接 (最大强度: ${apiMaxStrength})`).css('color', '#4caf50');
+        } else {
+            $dot.css('background-color', '#f44336'); // Red
+            if (apiMaxStrength === -1) {
+                $text.text('未连接 (设备离线)').css('color', '#f44336');
+            } else {
+                $text.text('未连接').css('color', '#f44336');
+            }
+        }
+    }
+}
+
 function init() {
     console.log('[DG-Lab] Initializing extension...');
     
@@ -257,6 +317,12 @@ function init() {
 
     // Monitor new messages using official event source
     eventSource.on(event_types.MESSAGE_RECEIVED, onMessageReceived);
+    
+    // Start polling loop (every 5 seconds)
+    setInterval(fetchGameInfo, 5000);
+    // Initial fetch
+    fetchGameInfo();
+
     console.log('[DG-Lab] Event listener attached.');
 }
 
